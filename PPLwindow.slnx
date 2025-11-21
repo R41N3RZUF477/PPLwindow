@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="PPLwindow/PPLwindow.vcxproj" Id="cad0de91-8d30-4fcc-876a-439219338987" />
+</Solution>
